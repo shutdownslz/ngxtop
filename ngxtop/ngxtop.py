@@ -232,6 +232,7 @@ def parse_caddy_log(lines):
                 'http_user_agent': headers.get('User-Agent', ['-'])[0] if isinstance(headers.get('User-Agent', '-'), list) else headers.get('User-Agent', '-'),
                 'request_uri': uri,
                 'request_time': float(entry.get('duration', 0)),
+                'host': req.get('host', '-'),  # Add host field from Caddy logs
             }
             
             # Add derived fields

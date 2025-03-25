@@ -154,7 +154,7 @@ def extract_variables(log_format):
         # Define the fields available in Caddy logs
         for field in ['remote_addr', 'remote_user', 'time_local', 'request', 
                      'status', 'body_bytes_sent', 'http_referer', 'http_user_agent',
-                     'request_time', 'request_uri', 'request_path']:
+                     'request_time', 'request_uri', 'request_path', 'host']:
             yield field
         return
     for match in re.findall(REGEX_LOG_FORMAT_VARIABLE, log_format):

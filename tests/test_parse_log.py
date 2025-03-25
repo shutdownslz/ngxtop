@@ -28,6 +28,7 @@ class TestParseLog(unittest.TestCase):
         self.assertEqual(record['request'], 'GET /index.html HTTP/1.1')
         self.assertEqual(record['status_type'], 2)  # 2xx status
         self.assertEqual(record['request_path'], '/index.html')
+        self.assertEqual(record['host'], 'example.com')  # Check host field
     
     def test_parse_caddy_log_invalid_json(self):
         """Test handling of invalid JSON in Caddy logs"""

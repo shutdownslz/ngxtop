@@ -17,7 +17,8 @@ class TestConfigParser(unittest.TestCase):
         # Check that all expected fields are present
         expected_fields = [
             'remote_addr', 'status', 'request', 'body_bytes_sent', 
-            'http_referer', 'http_user_agent', 'request_time', 'request_path'
+            'http_referer', 'http_user_agent', 'request_time', 'request_path',
+            'host'
         ]
         
         for field in expected_fields:

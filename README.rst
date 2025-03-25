@@ -180,3 +180,24 @@ Parse Caddy server access log with JSON format
     | /api/v2/metrics                     |      10 |          873.000 |     8 |     0 |     0 |     2 |
     | /favicon.ico                        |       8 |         1246.000 |     8 |     0 |     0 |     0 |
 
+Group by host (useful in multi-host setups)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+::
+
+    $ ngxtop -l /var/log/caddy/access.log -f caddy --group-by host
+    running for 10 seconds, 156 records processed: 15.60 req/sec
+
+    Summary:
+    |   count |   avg_bytes_sent |   2xx |   3xx |   4xx |   5xx |
+    |---------+------------------+-------+-------+-------+-------|
+    |     156 |         7281.632 |   142 |     8 |     4 |     2 |
+
+    Detailed:
+    | host                |   count |   avg_bytes_sent |   2xx |   3xx |   4xx |   5xx |
+    |---------------------+---------+------------------+-------+-------+-------+-------|
+    | api.example.com     |      75 |          124.533 |    73 |     0 |     0 |     2 |
+    | static.example.net  |      42 |        16903.857 |    42 |     0 |     0 |     0 |
+    | example.org         |      31 |         3791.258 |    19 |     8 |     4 |     0 |
+    | imusic.br.com       |       8 |        16818.000 |     8 |     0 |     0 |     0 |
+
