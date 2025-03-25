@@ -19,6 +19,7 @@ LOG_FORMAT_COMBINED = '$remote_addr - $remote_user [$time_local] ' \
 LOG_FORMAT_COMMON   = '$remote_addr - $remote_user [$time_local] ' \
                       '"$request" $status $body_bytes_sent ' \
                       '"$http_x_forwarded_for"'
+LOG_FORMAT_CADDY    = 'caddy'
 
 # common parser element
 semicolon = Literal(';').suppress()
@@ -132,6 +133,8 @@ def build_pattern(log_format):
         log_format = LOG_FORMAT_COMBINED
     elif log_format == 'common':
         log_format = LOG_FORMAT_COMMON
+    elif log_format == 'caddy':
+        return 'caddy'  # Special case for Caddy JSON format
     pattern = re.sub(REGEX_SPECIAL_CHARS, r'\\\1', log_format)
     pattern = re.sub(REGEX_LOG_FORMAT_VARIABLE, '(?P<\\1>.*)', pattern)
     return re.compile(pattern)
@@ -145,6 +148,15 @@ def extract_variables(log_format):
     """
     if log_format == 'combined':
         log_format = LOG_FORMAT_COMBINED
+    elif log_format == 'common':
+        log_format = LOG_FORMAT_COMMON
+    elif log_format == 'caddy':
+        # Define the fields available in Caddy logs
+        for field in ['remote_addr', 'remote_user', 'time_local', 'request', 
+                     'status', 'body_bytes_sent', 'http_referer', 'http_user_agent',
+                     'request_time', 'request_uri', 'request_path']:
+            yield field
+        return
     for match in re.findall(REGEX_LOG_FORMAT_VARIABLE, log_format):
         yield match
 

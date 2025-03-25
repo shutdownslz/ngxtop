@@ -9,6 +9,7 @@ Usage:
 Options:
     -l <file>, --access-log <file>  access log file to parse.
     -f <format>, --log-format <format>  log format as specify in log_format directive. [default: combined]
+                                       Supported values: combined, common, caddy (for Caddy JSON format)
     --no-follow  ngxtop default behavior is to ignore current lines in log
                      and only watch for new lines as they are written to the access log.
                      Use this flag to tell ngxtop to process the current content of the access log instead.
@@ -54,11 +55,15 @@ Examples:
 
     Analyze apache access log from remote machine using 'common' log format
     $ ssh remote tail -f /var/log/apache2/access.log | ngxtop -f common
+    
+    Analyze Caddy JSON access log:
+    $ ngxtop -l /var/log/caddy/access.log -f caddy
 """
 from __future__ import print_function
 import atexit
 from contextlib import closing
 import curses
+import json
 import logging
 import os
 import sqlite3
@@ -182,7 +187,71 @@ def to_float(value):
     return float(value) if value and value != '-' else 0.0
 
 
+def parse_caddy_log(lines):
+    """Parse Caddy JSON log format and convert to ngxtop's expected format."""
+    for line in lines:
+        try:
+            # Extract the JSON part of the line
+            # Caddy logs typically have timestamp and other info before the JSON
+            if "handled request" in line:
+                json_str = line.split("handled request", 1)[1].strip()
+            else:
+                json_str = line
+                
+            entry = json.loads(json_str)
+            if 'request' not in entry:
+                continue
+                
+            # Extract request info
+            req = entry.get('request', {})
+            method = req.get('method', '-')
+            uri = req.get('uri', '-')
+            headers = req.get('headers', {})
+            
+            # Get response info (nested in the logged JSON)
+            status = entry.get('status', 0)
+            size = entry.get('size', 0)
+            try:
+                # Try different fields that might contain response size
+                if 'size' in entry:
+                    size = int(entry['size'])
+                elif 'bytes_read' in entry:
+                    size = int(entry['bytes_read'])
+            except (ValueError, TypeError):
+                size = 0
+                
+            # Build record with fields ngxtop expects
+            record = {
+                'remote_addr': req.get('remote_ip', '-'),
+                'remote_user': '-',
+                'time_local': entry.get('ts', '-'),
+                'request': f"{method} {uri} HTTP/1.1",
+                'status': int(status),
+                'body_bytes_sent': size,
+                'http_referer': headers.get('Referer', ['-'])[0] if isinstance(headers.get('Referer', '-'), list) else headers.get('Referer', '-'),
+                'http_user_agent': headers.get('User-Agent', ['-'])[0] if isinstance(headers.get('User-Agent', '-'), list) else headers.get('User-Agent', '-'),
+                'request_uri': uri,
+                'request_time': float(entry.get('duration', 0)),
+            }
+            
+            # Add derived fields
+            record['status_type'] = record['status'] // 100
+            record['bytes_sent'] = record['body_bytes_sent']
+            record['request_path'] = urlparse.urlparse(uri).path if uri else None
+            
+            yield record
+            
+        except (json.JSONDecodeError, KeyError, ValueError, AttributeError) as e:
+            logging.warning(f"Error parsing log line: {e}")
+            continue
+
+
 def parse_log(lines, pattern):
+    # Handle Caddy format separately
+    if pattern == 'caddy':
+        return parse_caddy_log(lines)
+        
+    # Regular nginx/apache log parsing
     matches = (pattern.match(l) for l in lines)
     records = (m.groupdict() for m in matches if m is not None)
     records = map_field('status', to_int, records)
