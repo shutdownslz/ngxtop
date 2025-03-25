@@ -18,7 +18,7 @@ class TestCaddyIntegration(unittest.TestCase):
         # Skip test if fixture file doesn't exist
         if not os.path.isfile(self.log_file):
             self.skipTest(f"Fixture file not found: {self.log_file}")
-            
+
     def test_caddy_log_integration(self):
         """Test processing a Caddy log file end-to-end"""
         # Create a pattern for Caddy format
