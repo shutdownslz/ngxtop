@@ -56,6 +56,22 @@ class TestParseLog(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]['remote_addr'], '127.0.0.1')
         self.assertEqual(records[0]['status'], 0)  # Default value when missing
+    
+    def test_parse_caddy_log_truncated_json(self):
+        """Test handling of truncated JSON in Caddy logs"""
+        # Simulate a truncated log line
+        lines = [
+            '2025/03/25 11:30:51.092 INFO http.log.access.log2 handled request {"request": {"remote_ip": "127.0.0.1", "method": "GET", "uri": "/test with long data that gets truncated at column 1082 due to some buffer limit in the logging system and causes an unterminated string',
+            '{"status": 200}',  # Next line starts without proper JSON
+            '2025/03/25 11:30:51.093 INFO http.log.access.log2 handled request {"request": {"remote_ip": "127.0.0.2", "method": "POST", "uri": "/api", "host": "example.com"}, "status": 201, "size": 100}'
+        ]
+        
+        records = list(ngxtop.parse_log(lines, 'caddy'))
+        
+        # Should skip the truncated JSON and parse the valid one
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['remote_addr'], '127.0.0.2')
+        self.assertEqual(records[0]['status'], 201)
 
 
 if __name__ == '__main__':

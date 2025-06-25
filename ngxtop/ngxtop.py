@@ -192,12 +192,15 @@ def parse_caddy_log(lines):
     for line in lines:
         try:
             # Extract the JSON part of the line
-            # Caddy logs typically have timestamp and other info before the JSON
-            if "handled request" in line:
-                json_str = line.split("handled request", 1)[1].strip()
-            else:
-                json_str = line
+            # Caddy logs have format: timestamp INFO http.log.access.log2 handled request {json}
+            # Find the start of JSON by looking for the first { after "handled request"
+            json_start = line.find('{')
+            if json_start == -1:
+                continue
                 
+            json_str = line[json_start:].strip()
+            
+            # Handle potential truncated JSON by trying to parse
             entry = json.loads(json_str)
             if 'request' not in entry:
                 continue
