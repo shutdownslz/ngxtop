@@ -200,6 +200,11 @@ def parse_caddy_log(lines):
                 
             json_str = line[json_start:].strip()
             
+            # Basic check for complete JSON: should start with { and end with }
+            if not json_str.endswith('}'):
+                # Likely truncated line, skip it
+                continue
+            
             # Handle potential truncated JSON by trying to parse
             entry = json.loads(json_str)
             if 'request' not in entry:
@@ -246,7 +251,13 @@ def parse_caddy_log(lines):
             yield record
             
         except (json.JSONDecodeError, KeyError, ValueError, AttributeError) as e:
-            logging.warning(f"Error parsing log line: {e}")
+            # For JSON decode errors, provide more context about the problematic line
+            if isinstance(e, json.JSONDecodeError):
+                # Truncate the line for logging to avoid extremely long error messages
+                line_preview = line[:200] + "..." if len(line) > 200 else line
+                logging.warning(f"Error parsing log line: {e} - Line preview: {line_preview.strip()}")
+            else:
+                logging.warning(f"Error parsing log line: {e}")
             continue
 
 
