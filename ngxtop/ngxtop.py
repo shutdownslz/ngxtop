@@ -70,6 +70,7 @@ import sqlite3
 import time
 import sys
 import signal
+import stat
 
 try:
     import urlparse
@@ -114,6 +115,9 @@ DEFAULT_QUERIES = [
 
 DEFAULT_FIELDS = set(['status_type', 'bytes_sent'])
 
+# Global flag for log rotation signal
+_rotation_requested = False
+
 
 # ======================
 # generator utilities
@@ -121,15 +125,122 @@ DEFAULT_FIELDS = set(['status_type', 'bytes_sent'])
 def follow(the_file):
     """
     Follow a given file and yield new lines when they are available, like `tail -f`.
+    Handles log rotation by detecting inode changes and file size resets.
     """
-    with open(the_file) as f:
-        f.seek(0, 2)  # seek to eof
+    f = None
+    current_inode = None
+    current_size = 0
+    retry_count = 0
+    max_retries = 5
+    
+    try:
         while True:
+            # Check if we need to (re)open the file
+            if f is None or _should_reopen_file(the_file, current_inode, current_size) or _check_rotation_signal():
+                if f is not None:
+                    f.close()
+                    if _check_rotation_signal():
+                        logging.info(f"SIGHUP received, reopening {the_file}...")
+                        _clear_rotation_signal()
+                    else:
+                        logging.info(f"Detected log rotation for {the_file}, reopening...")
+                
+                # Try to open the file with retries
+                f, current_inode, current_size = _open_file_with_retry(the_file, max_retries)
+                if f is None:
+                    logging.error(f"Failed to open {the_file} after {max_retries} retries")
+                    break
+                
+                f.seek(0, 2)  # seek to eof
+                retry_count = 0
+            
+            # Read new lines
             line = f.readline()
             if not line:
                 time.sleep(0.1)  # sleep briefly before trying again
                 continue
+            
+            # Update current size
+            current_size = f.tell()
             yield line
+            
+    except KeyboardInterrupt:
+        if f is not None:
+            f.close()
+        raise
+    except Exception as e:
+        logging.error(f"Error in follow(): {e}")
+        if f is not None:
+            f.close()
+        raise
+
+
+def _should_reopen_file(file_path, current_inode, current_size):
+    """
+    Check if file should be reopened due to rotation.
+    Returns True if file has been rotated (inode changed or size decreased significantly).
+    """
+    try:
+        file_stat = os.stat(file_path)
+        new_inode = file_stat.st_ino
+        new_size = file_stat.st_size
+        
+        # File has been rotated if:
+        # 1. Inode changed (file was moved/renamed)
+        # 2. File size decreased significantly (> 1000 bytes, indicating truncation/rotation)
+        if current_inode is not None and new_inode != current_inode:
+            return True
+        
+        if new_size < current_size - 1000:  # Allow for some buffer, but detect major size drops
+            return True
+            
+        return False
+        
+    except (OSError, IOError):
+        # File doesn't exist or can't be accessed - we should try to reopen
+        return True
+
+
+def _open_file_with_retry(file_path, max_retries):
+    """
+    Open file with retry logic, handling temporary file absence during rotation.
+    Returns (file_handle, inode, size) or (None, None, 0) if failed.
+    """
+    for attempt in range(max_retries):
+        try:
+            file_stat = os.stat(file_path)
+            f = open(file_path, 'r')
+            return f, file_stat.st_ino, file_stat.st_size
+            
+        except (OSError, IOError) as e:
+            if attempt < max_retries - 1:
+                # Wait with exponential backoff: 0.1, 0.2, 0.4, 0.8, 1.6 seconds
+                wait_time = 0.1 * (2 ** attempt)
+                logging.warning(f"Failed to open {file_path} (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                logging.error(f"Failed to open {file_path} after {max_retries} attempts: {e}")
+    
+    return None, None, 0
+
+
+def _sighup_handler(signum, frame):
+    """Signal handler for SIGHUP - marks rotation as requested."""
+    global _rotation_requested
+    _rotation_requested = True
+    logging.info("SIGHUP received - will reopen log file on next check")
+
+
+def _check_rotation_signal():
+    """Check if log rotation was requested via signal."""
+    global _rotation_requested
+    return _rotation_requested
+
+
+def _clear_rotation_signal():
+    """Clear the rotation request flag."""
+    global _rotation_requested
+    _rotation_requested = False
 
 
 def map_field(field, func, dict_sequence):
@@ -422,6 +533,7 @@ def setup_reporter(processor, arguments):
         scr.refresh()
 
     signal.signal(signal.SIGALRM, print_report)
+    signal.signal(signal.SIGHUP, _sighup_handler)  # Handle log rotation signals
     interval = float(arguments['--interval'])
     signal.setitimer(signal.ITIMER_REAL, 0.1, interval)
 
