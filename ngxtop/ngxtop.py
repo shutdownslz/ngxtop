@@ -304,8 +304,15 @@ def parse_caddy_log(lines):
         try:
             # Extract the JSON part of the line
             # Caddy logs have format: timestamp INFO http.log.access.log2 handled request {json}
-            # Find the start of JSON by looking for the first { after "handled request"
-            json_start = line.find('{')
+            # Find "handled request" first, then find the JSON after it
+            handled_pos = line.find('handled request')
+            if handled_pos == -1:
+                # Try to parse as pure JSON if no "handled request" prefix
+                json_start = line.find('{')
+            else:
+                # Find the first { after "handled request"
+                json_start = line.find('{', handled_pos + len('handled request'))
+            
             if json_start == -1:
                 continue
                 
@@ -386,8 +393,14 @@ def parse_caddy_log(lines):
                         logging.info(f"                            {' ' * (e.pos - start - 3)}^")
                     
                     # Output the complete line for analysis
-                    logging.info(f"Complete line ({len(line)} chars):")
-                    logging.info(line.rstrip())
+                    logging.info(f"Complete line from beginning ({len(line)} chars):")
+                    # Show first 100 chars to see the prefix, then ... then area around JSON start
+                    if len(line) > 200:
+                        prefix = line[:100]
+                        json_area = line[max(0, json_start-20):json_start+80]
+                        logging.info(f"{prefix}...{json_area}...")
+                    else:
+                        logging.info(line.rstrip())
                     
                     # Output the extracted JSON string
                     logging.info(f"Extracted JSON string ({len(json_str)} chars):")
