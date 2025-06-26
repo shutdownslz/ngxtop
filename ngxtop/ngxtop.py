@@ -362,11 +362,37 @@ def parse_caddy_log(lines):
             yield record
             
         except (json.JSONDecodeError, KeyError, ValueError, AttributeError) as e:
-            # For JSON decode errors, provide more context about the problematic line
+            # For JSON decode errors, provide appropriate level of detail
             if isinstance(e, json.JSONDecodeError):
-                # Truncate the line for logging to avoid extremely long error messages
+                # Always show a concise warning
                 line_preview = line[:200] + "..." if len(line) > 200 else line
                 logging.warning(f"Error parsing log line: {e} - Line preview: {line_preview.strip()}")
+                
+                # Show detailed debugging info only in verbose mode (INFO level)
+                if logging.getLogger().isEnabledFor(logging.INFO):
+                    logging.info("="*80)
+                    logging.info(f"Detailed JSON parsing error: {e}")
+                    logging.info(f"Error position: line {e.lineno}, column {e.colno} (char {e.pos})")
+                    logging.info(f"Line length: {len(line)} characters")
+                    logging.info(f"Line ends with newline: {line.endswith(chr(10))}")
+                    logging.info(f"JSON start position: {json_start}")
+                    logging.info(f"Extracted JSON length: {len(json_str)} characters")
+                    
+                    # Show the area around the error
+                    if e.pos is not None and e.pos < len(json_str):
+                        start = max(0, e.pos - 20)
+                        end = min(len(json_str), e.pos + 20)
+                        logging.info(f"JSON around error position: ...{json_str[start:end]}...")
+                        logging.info(f"                            {' ' * (e.pos - start - 3)}^")
+                    
+                    # Output the complete line for analysis
+                    logging.info(f"Complete line ({len(line)} chars):")
+                    logging.info(line.rstrip())
+                    
+                    # Output the extracted JSON string
+                    logging.info(f"Extracted JSON string ({len(json_str)} chars):")
+                    logging.info(json_str)
+                    logging.info("="*80)
             else:
                 logging.warning(f"Error parsing log line: {e}")
             continue
