@@ -58,6 +58,8 @@ Usage
         -c <file>, --config <file>  allow ngxtop to parse nginx config file for log format and location.
         -i <filter-expression>, --filter <filter-expression>  filter in, records satisfied given expression are processed.
         -p <filter-expression>, --pre-filter <filter-expression> in-filter expression to check in pre-parsing phase.
+        
+        Supported log formats: combined (default), common, caddy (for Caddy JSON access logs)
 
 Samples
 -------
@@ -150,4 +152,52 @@ Parse apache log from remote server with `common` format
     | /xxxxxxxxxxx/xxxxxxxx                    |      15 |         9978.800 |    15 |     0 |     0 |     0 |
     | /xxxxx/                                  |      14 |            0.000 |     0 |    14 |     0 |     0 |
     | /xxxxxxxxxx/xxxxxxxx/xxxxx               |      13 |        20530.154 |    13 |     0 |     0 |     0 |
+
+Parse Caddy server access log with JSON format
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+::
+
+    $ ngxtop -l /var/log/caddy/access.log -f caddy
+    running for 15 seconds, 234 records processed: 15.60 req/sec
+
+    Summary:
+    |   count |   avg_bytes_sent |   2xx |   3xx |   4xx |   5xx |
+    |---------+------------------+-------+-------+-------+-------|
+    |     234 |         5482.342 |   198 |    12 |    22 |     2 |
+
+    Detailed:
+    | request_path                        |   count |   avg_bytes_sent |   2xx |   3xx |   4xx |   5xx |
+    |-------------------------------------+---------+------------------+-------+-------+-------+-------|
+    | /api/v1/users                       |      32 |          128.000 |    32 |     0 |     0 |     0 |
+    | /images/logo.png                    |      28 |        24560.000 |    28 |     0 |     0 |     0 |
+    | /blog/article-not-found             |      22 |         5621.000 |     0 |     0 |    22 |     0 |
+    | /audiobooks                         |      21 |        16818.000 |    21 |     0 |     0 |     0 |
+    | /v1/sessions/12345                  |      18 |           35.000 |    18 |     0 |     0 |     0 |
+    | /static/css/main.css                |      17 |         1459.000 |    17 |     0 |     0 |     0 |
+    | /static/js/app.js                   |      15 |         5824.000 |    15 |     0 |     0 |     0 |
+    | /                                   |      12 |         3245.000 |     0 |    12 |     0 |     0 |
+    | /api/v2/metrics                     |      10 |          873.000 |     8 |     0 |     0 |     2 |
+    | /favicon.ico                        |       8 |         1246.000 |     8 |     0 |     0 |     0 |
+
+Group by host (useful in multi-host setups)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+::
+
+    $ ngxtop -l /var/log/caddy/access.log -f caddy --group-by host
+    running for 10 seconds, 156 records processed: 15.60 req/sec
+
+    Summary:
+    |   count |   avg_bytes_sent |   2xx |   3xx |   4xx |   5xx |
+    |---------+------------------+-------+-------+-------+-------|
+    |     156 |         7281.632 |   142 |     8 |     4 |     2 |
+
+    Detailed:
+    | host                |   count |   avg_bytes_sent |   2xx |   3xx |   4xx |   5xx |
+    |---------------------+---------+------------------+-------+-------+-------+-------|
+    | api.example.com     |      75 |          124.533 |    73 |     0 |     0 |     2 |
+    | static.example.net  |      42 |        16903.857 |    42 |     0 |     0 |     0 |
+    | example.org         |      31 |         3791.258 |    19 |     8 |     4 |     0 |
+    | imusic.br.com       |       8 |        16818.000 |     8 |     0 |     0 |     0 |
 

@@ -9,6 +9,7 @@ Usage:
 Options:
     -l <file>, --access-log <file>  access log file to parse.
     -f <format>, --log-format <format>  log format as specify in log_format directive. [default: combined]
+                                       Supported values: combined, common, caddy (for Caddy JSON format)
     --no-follow  ngxtop default behavior is to ignore current lines in log
                      and only watch for new lines as they are written to the access log.
                      Use this flag to tell ngxtop to process the current content of the access log instead.
@@ -54,17 +55,22 @@ Examples:
 
     Analyze apache access log from remote machine using 'common' log format
     $ ssh remote tail -f /var/log/apache2/access.log | ngxtop -f common
+    
+    Analyze Caddy JSON access log:
+    $ ngxtop -l /var/log/caddy/access.log -f caddy
 """
 from __future__ import print_function
 import atexit
 from contextlib import closing
 import curses
+import json
 import logging
 import os
 import sqlite3
 import time
 import sys
 import signal
+import stat
 
 try:
     import urlparse
@@ -109,6 +115,9 @@ DEFAULT_QUERIES = [
 
 DEFAULT_FIELDS = set(['status_type', 'bytes_sent'])
 
+# Global flag for log rotation signal
+_rotation_requested = False
+
 
 # ======================
 # generator utilities
@@ -116,15 +125,122 @@ DEFAULT_FIELDS = set(['status_type', 'bytes_sent'])
 def follow(the_file):
     """
     Follow a given file and yield new lines when they are available, like `tail -f`.
+    Handles log rotation by detecting inode changes and file size resets.
     """
-    with open(the_file) as f:
-        f.seek(0, 2)  # seek to eof
+    f = None
+    current_inode = None
+    current_size = 0
+    retry_count = 0
+    max_retries = 5
+    
+    try:
         while True:
+            # Check if we need to (re)open the file
+            if f is None or _should_reopen_file(the_file, current_inode, current_size) or _check_rotation_signal():
+                if f is not None:
+                    f.close()
+                    if _check_rotation_signal():
+                        logging.info(f"SIGHUP received, reopening {the_file}...")
+                        _clear_rotation_signal()
+                    else:
+                        logging.info(f"Detected log rotation for {the_file}, reopening...")
+                
+                # Try to open the file with retries
+                f, current_inode, current_size = _open_file_with_retry(the_file, max_retries)
+                if f is None:
+                    logging.error(f"Failed to open {the_file} after {max_retries} retries")
+                    break
+                
+                f.seek(0, 2)  # seek to eof
+                retry_count = 0
+            
+            # Read new lines
             line = f.readline()
             if not line:
                 time.sleep(0.1)  # sleep briefly before trying again
                 continue
+            
+            # Update current size
+            current_size = f.tell()
             yield line
+            
+    except KeyboardInterrupt:
+        if f is not None:
+            f.close()
+        raise
+    except Exception as e:
+        logging.error(f"Error in follow(): {e}")
+        if f is not None:
+            f.close()
+        raise
+
+
+def _should_reopen_file(file_path, current_inode, current_size):
+    """
+    Check if file should be reopened due to rotation.
+    Returns True if file has been rotated (inode changed or size decreased significantly).
+    """
+    try:
+        file_stat = os.stat(file_path)
+        new_inode = file_stat.st_ino
+        new_size = file_stat.st_size
+        
+        # File has been rotated if:
+        # 1. Inode changed (file was moved/renamed)
+        # 2. File size decreased significantly (> 1000 bytes, indicating truncation/rotation)
+        if current_inode is not None and new_inode != current_inode:
+            return True
+        
+        if new_size < current_size - 1000:  # Allow for some buffer, but detect major size drops
+            return True
+            
+        return False
+        
+    except (OSError, IOError):
+        # File doesn't exist or can't be accessed - we should try to reopen
+        return True
+
+
+def _open_file_with_retry(file_path, max_retries):
+    """
+    Open file with retry logic, handling temporary file absence during rotation.
+    Returns (file_handle, inode, size) or (None, None, 0) if failed.
+    """
+    for attempt in range(max_retries):
+        try:
+            file_stat = os.stat(file_path)
+            f = open(file_path, 'r')
+            return f, file_stat.st_ino, file_stat.st_size
+            
+        except (OSError, IOError) as e:
+            if attempt < max_retries - 1:
+                # Wait with exponential backoff: 0.1, 0.2, 0.4, 0.8, 1.6 seconds
+                wait_time = 0.1 * (2 ** attempt)
+                logging.warning(f"Failed to open {file_path} (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                logging.error(f"Failed to open {file_path} after {max_retries} attempts: {e}")
+    
+    return None, None, 0
+
+
+def _sighup_handler(signum, frame):
+    """Signal handler for SIGHUP - marks rotation as requested."""
+    global _rotation_requested
+    _rotation_requested = True
+    logging.info("SIGHUP received - will reopen log file on next check")
+
+
+def _check_rotation_signal():
+    """Check if log rotation was requested via signal."""
+    global _rotation_requested
+    return _rotation_requested
+
+
+def _clear_rotation_signal():
+    """Clear the rotation request flag."""
+    global _rotation_requested
+    _rotation_requested = False
 
 
 def map_field(field, func, dict_sequence):
@@ -182,7 +298,125 @@ def to_float(value):
     return float(value) if value and value != '-' else 0.0
 
 
+def parse_caddy_log(lines):
+    """Parse Caddy JSON log format and convert to ngxtop's expected format."""
+    for line in lines:
+        try:
+            # Extract the JSON part of the line
+            # Caddy logs have format: timestamp INFO http.log.access.log2 handled request {json}
+            # Find "handled request" first, then find the JSON after it
+            handled_pos = line.find('handled request')
+            if handled_pos == -1:
+                # Try to parse as pure JSON if no "handled request" prefix
+                json_start = line.find('{')
+            else:
+                # Find the first { after "handled request"
+                json_start = line.find('{', handled_pos + len('handled request'))
+            
+            if json_start == -1:
+                continue
+                
+            json_str = line[json_start:].strip()
+            
+            # Basic check for complete JSON: should start with { and end with }
+            if not json_str.endswith('}'):
+                # Likely truncated line, skip it
+                continue
+            
+            # Handle potential truncated JSON by trying to parse
+            entry = json.loads(json_str)
+            if 'request' not in entry:
+                continue
+                
+            # Extract request info
+            req = entry.get('request', {})
+            method = req.get('method', '-')
+            uri = req.get('uri', '-')
+            headers = req.get('headers', {})
+            
+            # Get response info (nested in the logged JSON)
+            status = entry.get('status', 0)
+            size = entry.get('size', 0)
+            try:
+                # Try different fields that might contain response size
+                if 'size' in entry:
+                    size = int(entry['size'])
+                elif 'bytes_read' in entry:
+                    size = int(entry['bytes_read'])
+            except (ValueError, TypeError):
+                size = 0
+                
+            # Build record with fields ngxtop expects
+            record = {
+                'remote_addr': req.get('remote_ip', '-'),
+                'remote_user': '-',
+                'time_local': entry.get('ts', '-'),
+                'request': f"{method} {uri} HTTP/1.1",
+                'status': int(status),
+                'body_bytes_sent': size,
+                'http_referer': headers.get('Referer', ['-'])[0] if isinstance(headers.get('Referer', '-'), list) else headers.get('Referer', '-'),
+                'http_user_agent': headers.get('User-Agent', ['-'])[0] if isinstance(headers.get('User-Agent', '-'), list) else headers.get('User-Agent', '-'),
+                'request_uri': uri,
+                'request_time': float(entry.get('duration', 0)),
+                'host': req.get('host', '-'),  # Add host field from Caddy logs
+            }
+            
+            # Add derived fields
+            record['status_type'] = record['status'] // 100
+            record['bytes_sent'] = record['body_bytes_sent']
+            record['request_path'] = urlparse.urlparse(uri).path if uri else None
+            
+            yield record
+            
+        except (json.JSONDecodeError, KeyError, ValueError, AttributeError) as e:
+            # For JSON decode errors, provide appropriate level of detail
+            if isinstance(e, json.JSONDecodeError):
+                # Always show a concise warning
+                line_preview = line[:200] + "..." if len(line) > 200 else line
+                logging.warning(f"Error parsing log line: {e} - Line preview: {line_preview.strip()}")
+                
+                # Show detailed debugging info only in verbose mode (INFO level)
+                if logging.getLogger().isEnabledFor(logging.INFO):
+                    logging.info("="*80)
+                    logging.info(f"Detailed JSON parsing error: {e}")
+                    logging.info(f"Error position: line {e.lineno}, column {e.colno} (char {e.pos})")
+                    logging.info(f"Line length: {len(line)} characters")
+                    logging.info(f"Line ends with newline: {line.endswith(chr(10))}")
+                    logging.info(f"JSON start position: {json_start}")
+                    logging.info(f"Extracted JSON length: {len(json_str)} characters")
+                    
+                    # Show the area around the error
+                    if e.pos is not None and e.pos < len(json_str):
+                        start = max(0, e.pos - 20)
+                        end = min(len(json_str), e.pos + 20)
+                        logging.info(f"JSON around error position: ...{json_str[start:end]}...")
+                        logging.info(f"                            {' ' * (e.pos - start - 3)}^")
+                    
+                    # Output the complete line for analysis
+                    logging.info(f"Complete line from beginning ({len(line)} chars):")
+                    # Show first 100 chars to see the prefix, then ... then area around JSON start
+                    if len(line) > 200:
+                        prefix = line[:100]
+                        json_area = line[max(0, json_start-20):json_start+80]
+                        logging.info(f"{prefix}...{json_area}...")
+                    else:
+                        logging.info(line.rstrip())
+                    
+                    # Output the extracted JSON string
+                    logging.info(f"Extracted JSON string ({len(json_str)} chars):")
+                    logging.info(json_str)
+                    logging.info("="*80)
+            else:
+                logging.warning(f"Error parsing log line: {e}")
+            continue
+
+
 def parse_log(lines, pattern):
+    # Handle Caddy format separately
+    if pattern == 'caddy':
+        return parse_caddy_log(lines)
+        
+    # Regular nginx/apache log parsing
     matches = (pattern.match(l) for l in lines)
     records = (m.groupdict() for m in matches if m is not None)
     records = map_field('status', to_int, records)
@@ -338,6 +572,7 @@ def setup_reporter(processor, arguments):
         scr.refresh()
 
     signal.signal(signal.SIGALRM, print_report)
+    signal.signal(signal.SIGHUP, _sighup_handler)  # Handle log rotation signals
     interval = float(arguments['--interval'])
     signal.setitimer(signal.ITIMER_REAL, 0.1, interval)
 
