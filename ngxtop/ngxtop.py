@@ -19,7 +19,6 @@ Options:
     -w <var>, --having <expr>  having clause [default: 1]
     -o <var>, --order-by <var>  order of output for default query [default: count]
     -n <number>, --limit <number>  limit the number of records included in report for top command [default: 10]
-    -a <exp> ..., --a <exp> ...  add exp (must be aggregation exp: sum, avg, min, max, etc.) into output
 
     -v, --verbose  more verbose output
     -d, --debug  print every line and parsed record
@@ -33,7 +32,7 @@ Options:
 
 Examples:
     All examples read nginx config file for access log location and format.
-    If you want to specify the access log file and / or log format, use the -f and -a options.
+    If you want to specify the access log file and / or log format, use the -l and -f options.
 
     "top" like view of nginx requests
     $ ngxtop
@@ -515,18 +514,39 @@ class SQLProcessor(object):
         self.begin = False
         self.report_queries = report_queries
         self.index_fields = index_fields if index_fields is not None else []
-        self.column_list = ','.join(fields)
-        self.holder_list = ','.join(':%s' % var for var in fields)
         self.conn = sqlite3.connect(':memory:')
-        self.init_db()
+        # `fields` may be None for a dynamic schema (e.g. the `query` subcommand),
+        # in which case the table is created lazily from the first record's keys.
+        self.columns = list(fields) if fields else None
+        self.insert = None
+        if self.columns is not None:
+            self._init_db(self.columns)
+
+    def _init_db(self, columns):
+        self.columns = list(columns)
+        column_list = ','.join(self.columns)
+        holder_list = ','.join(':%s' % var for var in self.columns)
+        self.insert = 'insert into log (%s) values (%s)' % (column_list, holder_list)
+        create_table = 'create table log (%s)' % column_list
+        with closing(self.conn.cursor()) as cursor:
+            logging.info('sqlite init: %s', create_table)
+            cursor.execute(create_table)
+            for idx, field in enumerate(self.index_fields):
+                sql = 'create index log_idx%d on log (%s)' % (idx, field)
+                logging.info('sqlite init: %s', sql)
+                cursor.execute(sql)
 
     def process(self, records):
         self.begin = time.time()
-        insert = 'insert into log (%s) values (%s)' % (self.column_list, self.holder_list)
-        logging.info('sqlite insert: %s', insert)
         with closing(self.conn.cursor()) as cursor:
             for r in records:
-                cursor.execute(insert, r)
+                if self.insert is None:
+                    # dynamic schema: derive columns from the first record seen
+                    self._init_db(list(r.keys()))
+                    logging.info('sqlite insert: %s', self.insert)
+                # bind by column name; missing keys default to None so heterogeneous
+                # records (e.g. flat-JSON with varying fields) don't break the insert
+                cursor.execute(self.insert, {c: r.get(c) for c in self.columns})
 
     def report(self):
         if not self.begin:
@@ -535,6 +555,10 @@ class SQLProcessor(object):
         duration = time.time() - self.begin
         status = 'running for %.0f seconds, %d records processed: %.2f req/sec'
         output = [status % (duration, count, count / duration)]
+        # nothing was inserted (e.g. a dynamic-schema query with no matching records):
+        # the table was never created, so skip running the report queries
+        if self.insert is None:
+            return output[0]
         with closing(self.conn.cursor()) as cursor:
             for query in self.report_queries:
                 if isinstance(query, tuple):
@@ -547,17 +571,9 @@ class SQLProcessor(object):
                 output.append('%s\n%s' % (label, result))
         return '\n\n'.join(output)
 
-    def init_db(self):
-        create_table = 'create table log (%s)' % self.column_list
-        with closing(self.conn.cursor()) as cursor:
-            logging.info('sqlite init: %s', create_table)
-            cursor.execute(create_table)
-            for idx, field in enumerate(self.index_fields):
-                sql = 'create index log_idx%d on log (%s)' % (idx, field)
-                logging.info('sqlite init: %s', sql)
-                cursor.execute(sql)
-
     def count(self):
+        if self.insert is None:
+            return 0
         with closing(self.conn.cursor()) as cursor:
             cursor.execute('select count(1) from log')
             return cursor.fetchone()[0]
@@ -607,19 +623,27 @@ def build_processor(arguments):
         report_queries = [(label, query)]
     elif arguments['query']:
         report_queries = arguments['<query>']
-        fields = arguments['<fields>']
+        fields = None  # dynamic schema: columns are inferred from the data
+
     else:
         report_queries = [(name, query % arguments) for name, query in DEFAULT_QUERIES]
         fields = DEFAULT_FIELDS.union(set([arguments['--group-by']]))
 
-    for label, query in report_queries:
+    for item in report_queries:
+        if isinstance(item, tuple):
+            label, query = item
+        else:
+            label, query = '', item
         logging.info('query for "%s":\n %s', label, query)
 
-    processor_fields = []
-    for field in fields:
-        processor_fields.extend(field.split(','))
-
-    processor = SQLProcessor(report_queries, processor_fields)
+    if fields is None:
+        # `query` subcommand: let SQLProcessor build the table from the first record
+        processor = SQLProcessor(report_queries, None)
+    else:
+        processor_fields = []
+        for field in fields:
+            processor_fields.extend(field.split(','))
+        processor = SQLProcessor(report_queries, processor_fields)
     return processor
 
 
