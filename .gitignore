@@ -7,7 +7,6 @@ Vagrantfile
 # Python / build artifacts
 *.egg-info/
 build/
-dist/
 
 # Virtual environments
 .venv/

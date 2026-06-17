@@ -19,18 +19,42 @@
 
 ## 安装
 
-本项目使用标准的 `pyproject.toml` 打包。从源码以可编辑模式安装（会一并安装运行时依赖 `docopt`、`tabulate`、
-`pyparsing`）：
+本项目使用标准的 `pyproject.toml` 打包，无需 `setup.py`。`pip`、`setuptools`、`build`、PyPI 都直接读取
+`pyproject.toml`。安装后会生成 `ngxtop` 命令行工具，运行时依赖 `docopt`、`tabulate`、`pyparsing` 会自动安装。
+
+下面任选一种方式安装：
+
+### 1. 直接从 Git 安装（最方便，无需传文件）
 
 ```bash
-# 使用 uv
-uv pip install -e .
-
-# 或使用 pip
-pip install -e .
+pip install git+https://github.com/shutdownslz/ngxtop.git
+# 或使用 SSH
+pip install git+ssh://git@github.com/shutdownslz/ngxtop.git
+# 指定分支 / 标签：在末尾加 @master 或 @v0.1.0
 ```
 
-安装后会生成 `ngxtop` 命令行工具。
+### 2. 安装预构建的 wheel（发给同学直接用）
+
+仓库 `dist/` 目录下提供了已构建的安装包，下载后直接安装：
+
+```bash
+pip install dist/ngxtop-0.1.0-py2.py3-none-any.whl
+```
+
+### 3. 从源码安装
+
+```bash
+pip install .            # 普通安装
+pip install -e .         # 可编辑模式（开发用）
+# 也可使用 uv：uv pip install -e .
+```
+
+### 自行构建分发包
+
+```bash
+uv build        # 或 python -m build
+# 产物输出到 dist/：ngxtop-<version>-py2.py3-none-any.whl 和 ngxtop-<version>.tar.gz
+```
 
 > **Python 版本支持：** `ngxtop` 历史上同时面向 Python 2 和 3。注意本 fork 中较新的代码路径（follow / 日志轮转处理，
 > 以及 JSON 解析器）使用了 f-string，需要 **Python 3.6+**。
