@@ -61,6 +61,8 @@ uv build        # 或 python -m build
 
 ## 用法
 
+> 完整的命令行参考（所有子命令、选项、字段、过滤与已知限制）见 [docs/cli.md](docs/cli.md)。
+
 ```
 Usage:
     ngxtop [options]
