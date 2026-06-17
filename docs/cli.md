@@ -179,7 +179,58 @@ ngxtop -f json -i 'logtime[12:20] >= "11:00:00" and logtime[12:20] < "11:10:00"'
 
 ---
 
-## 9. 已知限制 / 注意事项
+## 9. 自定义查询（`query`）
+
+当内置的 `print/top/avg/sum` 不够用时，用 `query` 对内存表 `log` 写**任意 SQLite SQL**。
+
+### 表 `log` 的结构
+- 每条解析出的日志记录 = 一行；每个字段 = 一列。
+- 始终可用的派生列：`status_type`（2/3/4/5）、`request_path`（去查询串的路径）。
+- `-f json` 下，**所有原始 JSON 键都是列**（如 `domain`、`auth_user`、`upstream_status`、`ts`、`logtime`…）。
+- 列结构由**首条记录的字段自动推断**；不同记录字段不一致时，缺失的列以 `NULL` 填充。
+
+### 相比内置子命令多出来的能力
+`print/top/avg/sum` 是固定套路（单一聚合或纯计数排行），`query` 还能做：
+
+```bash
+# 1) 多维分组 + 计算列 + HAVING：样本>=10 且平均耗时>0.5s 的接口
+ngxtop -f json -l access.json.log --no-follow query \
+'select request_path, count(1) as cnt, round(avg(request_time),3) as avg_s, round(max(request_time),3) as max_s
+ from log group by request_path having cnt>=10 and avg_s>0.5 order by avg_s desc'
+
+# 2) 条件聚合：一行同时算总数 / 3xx 数 / 慢请求(>1s)数
+ngxtop -f json -l access.json.log --no-follow query \
+'select auth_user,
+        count(1) as total,
+        sum(case when status_type=3 then 1 else 0 end) as redirects,
+        sum(case when request_time>1 then 1 else 0 end) as slow_gt1s
+ from log group by auth_user order by total desc'
+
+# 3) 时间桶聚合：按分钟统计 QPS 与平均耗时（substr 下标从 1 开始，故为 13）
+ngxtop -f json -l access.json.log --no-follow query \
+'select substr(logtime,13,5) as minute, count(1) as cnt, round(avg(request_time),3) as avg_s
+ from log group by minute order by minute'
+
+# 4) 错误率占比
+ngxtop -f json -l access.json.log --no-follow query \
+'select round(100.0*sum(case when status_type>=4 then 1 else 0 end)/count(1),2) as err_pct from log'
+
+# 5) 独立客户端数
+ngxtop -f json -l access.json.log --no-follow query \
+'select count(distinct remote_addr) as uniq_ip from log'
+```
+
+还支持子查询、`group by domain, status` 多键分组、`order by avg(bytes_sent)*count` 计算列排序等。
+
+### 用法与注意
+- 表名固定为 `log`；可一次传多条 SQL，每条各出一张表。
+- 输出首行的 `running for …` 以及空标题行属正常（query 模式无标题）。
+- SQL 直接执行，**只应传入你自己可信的语句**，不要拼接不可信输入。
+- SQLite **没有内置百分位（P95/P99）函数**；要分位数需用 `order by ... limit` 配合行号变通，或导出后另算。
+
+---
+
+## 10. 已知限制 / 注意事项
 
 - **`logtime` 切片过滤仅单日有效**：只比较了当天时间，且依赖固定日期宽度 `DD/Mon/YYYY`；跨天请用数值 `ts`。
 - **Python 版本**：较新代码路径（follow / 日志轮转 / JSON 解析）使用 f-string，需 **Python 3.6+**。
@@ -187,7 +238,7 @@ ngxtop -f json -i 'logtime[12:20] >= "11:00:00" and logtime[12:20] < "11:10:00"'
 
 ---
 
-## 10. 默认报表的 SQL（理解 `-g/-w/-o/-n`）
+## 11. 默认报表的 SQL（理解 `-g/-w/-o/-n`）
 
 默认报表由两条 SQL 生成，`-g/-w/-o/-n` 直接填进模板：
 
@@ -220,7 +271,7 @@ ngxtop --order-by 'avg(bytes_sent) * count'
 
 ---
 
-## 11. 常用示例速查
+## 12. 常用示例速查
 
 ```bash
 # 默认 top 视图（自动探测配置）
