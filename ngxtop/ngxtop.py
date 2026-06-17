@@ -9,7 +9,7 @@ Usage:
 Options:
     -l <file>, --access-log <file>  access log file to parse.
     -f <format>, --log-format <format>  log format as specify in log_format directive. [default: combined]
-                                       Supported values: combined, common, caddy (for Caddy JSON format)
+                                       Supported values: combined, common, caddy (for Caddy JSON format), json (for generic flat-JSON / nginx escape=json logs)
     --no-follow  ngxtop default behavior is to ignore current lines in log
                      and only watch for new lines as they are written to the access log.
                      Use this flag to tell ngxtop to process the current content of the access log instead.
@@ -58,6 +58,10 @@ Examples:
     
     Analyze Caddy JSON access log:
     $ ngxtop -l /var/log/caddy/access.log -f caddy
+
+    Analyze a flat-JSON access log (one JSON object per line, e.g. nginx escape=json):
+    $ ngxtop -l /var/log/nginx/access.json.log -f json
+    $ ngxtop -l access.json.log -f json --no-follow -g domain -i 'status >= 400'
 """
 from __future__ import print_function
 import atexit
@@ -411,10 +415,85 @@ def parse_caddy_log(lines):
             continue
 
 
+# Field aliases used to derive ngxtop's canonical fields from arbitrary flat-JSON
+# access logs (e.g. nginx `log_format ... escape=json`). The first key found in the
+# record wins. All original JSON keys are kept as-is so they remain queryable too.
+JSON_URI_ALIASES = ('request_uri', 'req_uri', 'uri')
+JSON_METHOD_ALIASES = ('request_method', 'req_method', 'method')
+JSON_BYTES_ALIASES = ('bytes_sent', 'body_bytes_sent', 'size')
+JSON_REQUEST_TIME_ALIASES = ('request_time', 'req_time', 'duration')
+
+
+def _first_alias(record, aliases):
+    """Return the value of the first present alias key in record, else None."""
+    for key in aliases:
+        if key in record:
+            return record[key]
+    return None
+
+
+def parse_json_log(lines):
+    """
+    Parse a generic flat-JSON access log (one JSON object per line) into ngxtop's
+    expected record format.
+
+    All original JSON keys are passed through unchanged so any field can be used in
+    --group-by / --filter, while the canonical fields the default report relies on
+    (status, status_type, bytes_sent, request_time, request, request_path) are
+    derived via JSON_*_ALIASES when not already present.
+
+    :param lines: iterable of raw log lines
+    :return: generator of record dicts
+    """
+    for line in lines:
+        line = line.strip()
+        if not line or not line.startswith('{'):
+            continue
+        try:
+            record = json.loads(line)
+        except (json.JSONDecodeError, ValueError) as e:
+            line_preview = line[:200] + '...' if len(line) > 200 else line
+            logging.warning(f"Error parsing JSON log line: {e} - Line preview: {line_preview}")
+            continue
+        if not isinstance(record, dict):
+            logging.warning(f"Skipping non-object JSON log line: {line[:80]}")
+            continue
+
+        # status / status_type
+        record['status'] = to_int(record.get('status'))
+        record['status_type'] = parse_status_type(record)
+
+        # bytes_sent (keep original key too, but ensure canonical field exists)
+        if 'bytes_sent' not in record:
+            record['bytes_sent'] = _first_alias(record, JSON_BYTES_ALIASES)
+        record['bytes_sent'] = to_int(record['bytes_sent'])
+
+        # request_time
+        if 'request_time' not in record:
+            record['request_time'] = _first_alias(record, JSON_REQUEST_TIME_ALIASES)
+        record['request_time'] = to_float(record['request_time'])
+
+        # request line (method + uri), derived only when absent
+        uri = _first_alias(record, JSON_URI_ALIASES)
+        if 'request' not in record:
+            method = _first_alias(record, JSON_METHOD_ALIASES) or '-'
+            record['request'] = f"{method} {uri}" if uri else '-'
+
+        # request_path (path component of the URI, query stripped)
+        if 'request_path' not in record:
+            record['request_path'] = urlparse.urlparse(uri).path if uri else None
+
+        yield record
+
+
 def parse_log(lines, pattern):
     # Handle Caddy format separately
     if pattern == 'caddy':
         return parse_caddy_log(lines)
+
+    # Handle generic flat-JSON format separately
+    if pattern == 'json':
+        return parse_json_log(lines)
         
     # Regular nginx/apache log parsing
     matches = (pattern.match(l) for l in lines)

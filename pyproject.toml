@@ -1,0 +1,21 @@
+[project]
+name = "ngxtop"
+version = "0.1.0"
+description = "Real-time metrics for nginx server"
+readme = "README.md"
+requires-python = ">=2.6"
+dependencies = [
+    "docopt",
+    "tabulate",
+    "pyparsing",
+]
+
+[project.scripts]
+ngxtop = "ngxtop.ngxtop:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ngxtop"]

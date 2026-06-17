@@ -1,0 +1,7 @@
+{"remote_addr": "10.0.0.1", "domain": "example.test", "auth_user": "alice", "req_method": "GET", "req_uri": "/api/users?page=1", "req_time": 0.123, "bytes_sent": 512, "status": 200, "upstream_status": "200"}
+{"remote_addr": "10.0.0.2", "domain": "example.test", "auth_user": "bob", "req_method": "GET", "req_uri": "/api/users?page=2", "req_time": 0.045, "bytes_sent": 480, "status": 200, "upstream_status": "200"}
+{"remote_addr": "10.0.0.3", "domain": "example.test", "auth_user": "-", "req_method": "GET", "req_uri": "/login", "req_time": 0.012, "bytes_sent": 392, "status": 301, "upstream_status": "301"}
+{"remote_addr": "10.0.0.4", "domain": "other.test", "auth_user": "carol", "req_method": "POST", "req_uri": "/api/orders", "req_time": 0.331, "bytes_sent": 1024, "status": 404, "upstream_status": "404"}
+{"remote_addr": "10.0.0.5", "domain": "other.test", "auth_user": "dave", "req_method": "GET", "req_uri": "/api/health", "req_time": 0.002, "bytes_sent": 18, "status": 500, "upstream_status": "500"}
+this is not json and must be skipped
+{"remote_addr": "10.0.0.6", "domain": "other.test", "auth_user": "erin", "req_method": "GET", "req_uri": "/api/health", "req_time": 0.003, "bytes_sent": 18, "status": 200, "upstream_status": "200"
