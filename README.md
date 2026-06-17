@@ -269,6 +269,58 @@ $ ngxtop -f json -l access.json.log --no-follow \
 > **注意：** `logtime` 切片方式只比较了**当天的时间**，因此仅在**单日**内正确，且依赖固定的日期宽度（`DD/Mon/YYYY`）。
 > 对于跨天的日志，或想与格式无关，请优先使用数值型的 `ts` 比较。
 
+## 计算 QPS 与峰值 QPS
+
+下列示例都用 `query` 子命令，依赖日志中以秒为单位的数值 epoch 字段 `ts`（QPS 的计算本质上需要"按时间分桶"）。
+
+### 平均 QPS（最近一小时）
+
+窗口上下界直接在 SQL 里用 `max(ts)` 和 `max(ts)-3600` 算，QPS = 窗口内行数 / 3600：
+
+```bash
+$ ngxtop -f json -l access.json.log --no-follow query \
+  'select count(1) as cnt, round(count(1)/3600.0, 4) as qps
+   from log
+   where ts >= (select max(ts) from log) - 3600'
+
+|   cnt |   qps |
+|-------+-------|
+|   347 | 0.096 |
+```
+
+> 输出首行的 `... records processed` 是读入的总行数，**不是**窗口内的数；窗口内的数看结果表的 `cnt`。
+> 这里取的是"日志最新时刻往前推一小时"，而非系统当前时间。
+
+### 峰值 QPS（按整秒分桶取最大）
+
+真实峰值 QPS = 任意 1 秒内的最大请求数，用 `cast(ts as integer)` 把时间截到整秒分桶再取 `max`：
+
+```bash
+$ ngxtop -f json -l access.json.log --no-follow query \
+  'select max(c) as peak_qps from (select count(1) as c from log group by cast(ts as integer))'
+
+|   peak_qps |
+|------------|
+|         57 |
+```
+
+定位峰值发生在哪一秒（顺便看 QPS 最高的前几秒，时间转北京时间）：
+
+```bash
+$ ngxtop -f json -l access.json.log --no-follow query \
+  "select datetime(cast(ts as integer)+8*3600,'unixepoch') as sec_utc8, count(1) as qps
+   from log group by cast(ts as integer) order by qps desc limit 5"
+
+| sec_utc8            |   qps |
+|---------------------+-------|
+| 2026-06-17 10:34:55 |    57 |
+| 2026-06-17 10:47:23 |    45 |
+| 2026-06-17 10:19:18 |    26 |
+```
+
+> 平均 QPS 与峰值 QPS 可能差很多：上例平均仅 ~0.1 req/s，峰值却到 57 req/s，说明流量很**突发**。
+> 想要按分钟峰值，把分桶键换成 `cast(ts/60 as integer)` 即可。
+
 ## 开发
 
 在项目根目录用 `pytest` 运行测试：
