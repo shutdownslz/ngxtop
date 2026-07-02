@@ -185,6 +185,20 @@ access_log /var/log/nginx/access.json.log json;
 
 格式错误 / 非 JSON 的行会被跳过，并打印一条 warning。
 
+### 哪些字段是必须的？
+
+- **硬性要求**：只有"每行必须是一个扁平 JSON 对象（`{...}`）"这一条；不满足的行会被跳过。
+- **没有任何字段是硬性必填**：缺 `status` / `bytes_sent` / `request_time` 时按 `0` 处理，缺 URI 时 `request_path`
+  为 `None`，程序不会报错，只是相应统计变成 0 或空。
+- **要让开箱即用的默认报表有意义**，实用的最小字段集是：`status`（决定 2xx/3xx/4xx/5xx 与 `status_type`）+ 一个 URI
+  别名（`request_uri` / `req_uri` / `uri`，决定 `request_path` 分组）。再补 `bytes_sent` 和 `request_time` 的别名，
+  就能把默认 Summary 的所有列填满。
+- **key 命名约束**：所有 JSON 键都会保留，但凡是打算用于 `--group-by` / `--filter` / `--order-by` / `--having` /
+  `query` 的键，**应为合法标识符**（`snake_case`）。含点号、连字符、空格的键虽被保留，却无法在 `-i` 的 Python
+  表达式或 SQL 中直接引用。
+- **`query` 子命令**用**第一条记录的键**动态建表，因此各行的键集合应保持一致（或让首行包含键的超集）；其余命令用
+  显式字段列，不受此影响。
+
 ### 对 JSON 日志的默认视图
 
 ```

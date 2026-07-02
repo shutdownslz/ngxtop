@@ -61,6 +61,20 @@ Examples:
     Analyze a flat-JSON access log (one JSON object per line, e.g. nginx escape=json):
     $ ngxtop -l /var/log/nginx/access.json.log -f json
     $ ngxtop -l access.json.log -f json --no-follow -g domain -i 'status >= 400'
+
+JSON format field notes (-f json):
+    Each line must be a flat JSON object ({...}); malformed / non-object lines are skipped with a warning.
+    No field is strictly required: missing values simply default to 0 / None (nothing crashes).
+    For a meaningful default report provide at least:
+        - `status`                                  -> 2xx/3xx/4xx/5xx counts + status_type
+        - one URI alias: `request_uri`/`req_uri`/`uri`  -> request_path grouping
+    Optional aliases that fill the rest of the default Summary:
+        - `bytes_sent`/`body_bytes_sent`/`size`      -> avg_bytes_sent
+        - `request_time`/`req_time`/`duration`       -> request_time
+    All original JSON keys are kept and queryable, but any key used in -g/-i/-o/-w/query
+    should be a valid identifier (snake_case); keys with dots/hyphens/spaces can't be
+    referenced in filter expressions or SQL. The `query` subcommand builds its table from
+    the FIRST record's keys, so keep keys consistent across lines.
 """
 from __future__ import print_function
 import atexit
